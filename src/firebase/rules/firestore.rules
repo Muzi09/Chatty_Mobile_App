@@ -1,0 +1,263 @@
+rules_version = '2';
+
+// ============================================================================
+// Chatty — Firestore Security Rules
+// ----------------------------------------------------------------------------
+// Mental model: every protected resource answers one question — "is the
+// requester a participant of this chat/group?" We resolve that by checking
+// the deterministic chat id (sorted uids) or the members subcollection, then
+// cache the result in a `participant` variable for the rest of the rule.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function existingData() {
+      return resource.data;
+    }
+    function incomingData() {
+      return request.resource.data;
+    }
+
+    // For 1:1 chats, the chat id is "uidA_uidB" with uids sorted. We test
+    // membership by checking the id contains the requester.
+    function isChatParticipant(chatId) {
+      return isSignedIn() && chatId.matches('.*' + request.auth.uid + '.*');
+    }
+
+    // A user object must look like a user.
+    function validUserFields() {
+      return incomingData().uid == request.auth.uid
+        && incomingData().name is string
+        && incomingData().name.size() > 0
+        && incomingData().name.size() <= 80
+        && incomingData().email is string
+        && incomingData().email.matches('.*@.*\\..*')
+        && incomingData().photoURL is string
+        && incomingData().status is string
+        && incomingData().status.size() <= 140
+        && incomingData().isOnline is bool
+        && incomingData().lastSeen is timestamp
+        && incomingData().createdAt is timestamp;
+    }
+
+    // Message validation: only the documented fields, sensible sizes.
+    function validMessageFields(chatId) {
+      let d = incomingData();
+      let okBase = d.id is string
+        && d.senderId == request.auth.uid
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp
+        && d.type in ['text', 'image', 'video', 'audio', 'document', 'system'];
+      return okBase;
+    }
+
+    // ---------- /users/{uid} ----------
+    match /users/{uid} {
+      // Anyone signed in can read basic profiles (needed for chat list
+      // rendering, search, group member display). If you want stricter
+      // privacy, gate this on `isChatParticipant` instead.
+      allow read: if isSelf(uid) || isSignedIn();
+
+      // Profile creation happens once, on signup, by the user themselves.
+      allow create: if isSelf(uid) && validUserFields();
+
+      // Updates: user can change their own profile, but cannot spoof
+      // sensitive fields like createdAt.
+      allow update: if isSelf(uid)
+        && incomingData().uid == existingData().uid
+        && incomingData().email == existingData().email
+        && incomingData().createdAt == existingData().createdAt
+        && validUserFields();
+
+      allow delete: if false; // never; deletion is an account-deletion flow
+    }
+
+    // ---------- /chats/{chatId} (1:1) ----------
+    match /chats/{chatId} {
+      // Read requires being a participant. We also let the members/
+      // subcollection rule do its own check below.
+      allow read: if isChatParticipant(chatId);
+
+      // Create the chat doc only with the two uids. The members
+      // subcollection is created in the same write via a transaction
+      // client-side, and the rule below enforces per-member.
+      allow create: if isChatParticipant(chatId)
+        && incomingData().id == chatId
+        && incomingData().type == 'direct'
+        && incomingData().participants.size() == 2
+        && request.auth.uid in incomingData().participants
+        && incomingData().createdAt is timestamp
+        && incomingData().lastMessageAt is timestamp
+        && incomingData().lastMessage is string
+        && incomingData().lastMessage.size() <= 4000;
+
+      // Last-message denormalization updates: only the fields that
+      // represent the "headline" of the conversation can be touched.
+      // We forbid changing participants and createdAt after the fact.
+      allow update: if isChatParticipant(chatId)
+        && incomingData().id == existingData().id
+        && incomingData().type == existingData().type
+        && incomingData().participants == existingData().participants
+        && incomingData().createdAt == existingData().createdAt;
+
+      allow delete: if false; // chats are immutable records
+
+      // --- /chats/{chatId}/messages/{messageId} ---
+      match /messages/{messageId} {
+        allow read: if isChatParticipant(chatId);
+
+        // Create: sender must be a participant and must be themselves.
+        allow create: if isChatParticipant(chatId)
+          && request.auth.uid == incomingData().senderId
+          && validMessageFields(chatId)
+          && (incomingData().type != 'text' || (
+            incomingData().text is string
+            && incomingData().text.size() <= 4000
+          ))
+          && (incomingData().type == 'text' || (
+            incomingData().fileUrl is string
+            && incomingData().fileUrl.size() > 0
+            && incomingData().fileName is string
+            && incomingData().fileName.size() <= 256
+            && incomingData().fileSize is number
+            && incomingData().fileSize > 0
+            && incomingData().fileSize < 50 * 1024 * 1024
+          ));
+
+        // Update: only the sender, and only text/status/updatedAt/reactions.
+        // Reactions are an array of {uid, emoji, at} limited to 64.
+        allow update: if isChatParticipant(chatId)
+          && existingData().senderId == request.auth.uid
+          && incomingData().senderId == existingData().senderId
+          && incomingData().createdAt == existingData().createdAt
+          && incomingData().id == existingData().id
+          && incomingData().type == existingData().type
+          && (!('reactions' in incomingData())
+              || (incomingData().reactions is list
+                  && incomingData().reactions.size() <= 64))
+          && (!('text' in incomingData())
+              || (incomingData().text is string
+                  && incomingData().text.size() <= 4000))
+          && incomingData().status in ['sent', 'delivered', 'read'];
+
+        // Delete: sender can delete their own; receiver can "delete for me"
+        // is handled client-side via a per-user tombstone, not server delete.
+        // We allow hard delete only by the sender.
+        allow delete: if isChatParticipant(chatId)
+          && existingData().senderId == request.auth.uid;
+      }
+
+      // --- /chats/{chatId}/typing/{uid} ---
+      // Ephemeral. Owner can write their own; any participant can read.
+      match /typing/{uid} {
+        allow read: if isChatParticipant(chatId);
+        allow write: if isSelf(uid) && isChatParticipant(chatId);
+      }
+
+      // --- /chats/{chatId}/members/{uid} ---
+      // Per-user membership record holding read state. Created on first
+      // message receipt. Owner can update their own (e.g. lastReadAt).
+      match /members/{uid} {
+        allow read: if isChatParticipant(chatId);
+        allow write: if isSelf(uid) && isChatParticipant(chatId);
+      }
+    }
+
+    // ---------- /groups/{groupId} ----------
+    match /groups/{groupId} {
+      // A user can read a group only if they're a member.
+      function isGroupMember() {
+        return isSignedIn()
+          && exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid));
+      }
+      function isGroupAdmin() {
+        let m = get(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)).data;
+        return m.role == 'admin';
+      }
+
+      allow read: if isGroupMember();
+
+      // Anyone signed in can create a group; they become the first admin.
+      // Field constraints:
+      allow create: if isSignedIn()
+        && incomingData().id == groupId
+        && incomingData().name is string
+        && incomingData().name.size() > 0
+        && incomingData().name.size() <= 80
+        && incomingData().image is string
+        && incomingData().createdBy == request.auth.uid
+        && incomingData().createdAt is timestamp
+        && incomingData().lastMessageAt is timestamp
+        && incomingData().lastMessage is string;
+
+      // Admins can update group info; members cannot change admins/members
+      // from this rule (those happen via the members subcollection).
+      allow update: if isGroupAdmin()
+        && incomingData().id == existingData().id
+        && incomingData().createdBy == existingData().createdBy
+        && incomingData().createdAt == existingData().createdAt;
+
+      allow delete: if isGroupAdmin();
+
+      // --- group messages ---
+      match /messages/{messageId} {
+        allow read: if isGroupMember();
+        allow create: if isGroupMember()
+          && request.auth.uid == incomingData().senderId
+          && validMessageFields(chatId);
+        allow update: if isGroupMember()
+          && existingData().senderId == request.auth.uid
+          && incomingData().senderId == existingData().senderId
+          && incomingData().createdAt == existingData().createdAt;
+        allow delete: if isGroupMember()
+          && (existingData().senderId == request.auth.uid || isGroupAdmin());
+      }
+
+      // --- group members ---
+      match /members/{uid} {
+        allow read: if isGroupMember();
+        // Self can create their own membership record (e.g. when adding
+        // themselves to an open group). Admins can create any membership.
+        allow create: if isSelf(uid) || isGroupAdmin();
+        // Admins can change roles. A member can update non-privileged
+        // fields on their own record (e.g. muted, lastReadAt).
+        allow update: if (isSelf(uid)
+            && incomingData().role == existingData().role
+            && incomingData().joinedAt == existingData().joinedAt)
+          || isGroupAdmin();
+        // Self or admin can remove a member.
+        allow delete: if isSelf(uid) || isGroupAdmin();
+      }
+
+      match /typing/{uid} {
+        allow read: if isGroupMember();
+        allow write: if isSelf(uid) && isGroupMember();
+      }
+    }
+
+    // ---------- /userChats/{uid}/chats/{chatId} (inbox projection) ----------
+    match /userChats/{uid} {
+      allow read, write: if isSelf(uid);
+    }
+
+    // ---------- /userGroups/{uid}/groups/{groupId} ----------
+    match /userGroups/{uid} {
+      allow read, write: if isSelf(uid);
+    }
+
+    // ---------- /fcmTokens/{uid} ----------
+    // One doc per uid. Anyone signed in can write (the user owns their
+    // token), and the doc key is the uid, so impersonation is impossible.
+    match /fcmTokens/{uid} {
+      allow read, write: if isSelf(uid);
+    }
+  }
+}

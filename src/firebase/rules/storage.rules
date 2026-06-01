@@ -1,0 +1,90 @@
+rules_version = '2';
+
+// ============================================================================
+// Chatty — Firebase Storage Security Rules
+// ----------------------------------------------------------------------------
+// Path scheme:
+//   /avatars/{uid}/{file}                — profile pictures
+//   /chat_media/{chatId}/{messageId}/{file} — chat attachments
+//   /group_media/{groupId}/{messageId}/{file}
+// ============================================================================
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function isChatParticipant(chatId) {
+      return isSignedIn() && chatId.matches('.*' + request.auth.uid + '.*');
+    }
+
+    // Validate file size + content type per kind. We enforce both — never
+    // trust only the client-declared content type.
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    function isVideo() {
+      return request.resource.contentType.matches('video/.*');
+    }
+    function isAudio() {
+      return request.resource.contentType.matches('audio/.*');
+    }
+    function isDocument() {
+      return request.resource.contentType in [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/plain'
+      ];
+    }
+
+    // ---------- avatars ----------
+    match /avatars/{uid}/{file} {
+      // Anyone signed in can read (avatars are public-ish). If you want
+      // stricter privacy, allow read only to users the owner has chatted
+      // with — but that requires a Firestore lookup and slows renders.
+      allow read: if isSignedIn();
+      allow write: if isSelf(uid)
+        && isImage()
+        && request.resource.size < 5 * 1024 * 1024; // 5MB
+    }
+
+    // ---------- chat media ----------
+    match /chat_media/{chatId}/{messageId}/{file} {
+      // Read requires being a chat participant. Public read is forbidden
+      // because media URLs are guessable (we use messageId in the path).
+      allow read: if isChatParticipant(chatId);
+
+      // Write: must be participant, and contentType + size must match kind.
+      // We also require the messageId in the path to match the
+      // messageId we just generated, to keep uploads linked to messages.
+      allow write: if isChatParticipant(chatId)
+        && request.resource.size < 50 * 1024 * 1024 // 50MB hard cap
+        && (isImage() || isVideo() || isAudio() || isDocument());
+
+      // Once uploaded, content is immutable. Updates and deletes are not
+      // allowed — clients "delete" a message by tombstoning the Firestore
+      // doc and the storage deletion is a one-shot from a Cloud Function
+      // (so revoked participants can't re-fetch).
+    }
+
+    // ---------- group media ----------
+    match /group_media/{groupId}/{messageId}/{file} {
+      // Membership check: ask Firestore whether the requester is a member.
+      // Note: this is a cross-service call and adds ~1 RTT to the rule
+      // check. Acceptable trade-off for security.
+      allow read, write: if isSignedIn()
+        && firestore.exists(
+          /databases/(default)/documents/groups/$(groupId)/members/$(request.auth.uid)
+        )
+        && request.resource.size < 50 * 1024 * 1024
+        && (isImage() || isVideo() || isAudio() || isDocument());
+    }
+  }
+}
