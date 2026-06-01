@@ -1,0 +1,18 @@
+export const colors = {
+  primary: '#007AFF',
+  primaryLight: '#E8F4FD',
+  sentBubble: '#007AFF',
+  receivedBubble: '#E5E5EA',
+  background: '#FFFFFF',
+  surface: '#F2F2F7',
+  text: '#000000',
+  textSecondary: '#8E8E93',
+  textTertiary: '#C7C7CC',
+  border: '#C6C6C8',
+  success: '#34C759',
+  danger: '#FF3B30',
+  warning: '#FF9500',
+  unread: '#007AFF',
+  inactive: '#C7C7CC',
+  white: '#FFFFFF',
+};
