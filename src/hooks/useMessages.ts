@@ -159,11 +159,11 @@ export function useMessages(opts: UseMessagesOptions): UseMessagesResult {
       if (scope === 'direct') {
         await chatService.deleteMessage(conversationId, id);
       } else {
-        // groupService doesn't expose delete yet — use repository directly.
-        // (Kept simple; you can lift it into the service later.)
-        await import('../repositories/groupRepository').then((m) =>
-          m.groupRepository.deleteMessage(conversationId, id).catch(() => {}),
-        );
+        // groupRepository doesn't expose delete yet — fall through to a
+        // no-op so the type system is happy. Hook callers should not
+        // invoke delete for group messages until the repo gains it.
+        // eslint-disable-next-line no-console
+        console.warn('[useMessages] group deleteMessage not implemented');
       }
     },
     [scope, conversationId],

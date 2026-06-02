@@ -10,6 +10,8 @@ export const COLLECTIONS = {
   USER_CHATS: 'userChats',
   USER_GROUPS: 'userGroups',
   FCM_TOKENS: 'fcmTokens',
+  /** Username → uid reservations. Doc id is the lowercased username. */
+  USERNAMES: 'usernames',
 } as const;
 
 export const SUBCOLLECTIONS = {

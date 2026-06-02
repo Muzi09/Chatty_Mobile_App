@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { View, SectionList, StyleSheet, Text } from 'react-native';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { View, SectionList, StyleSheet, Text, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Contact } from '../../../types';
-import { contactsApi } from '../../../services/api';
+import { userService } from '../../../services/userService';
+import { chatService } from '../../../services/chatService';
+import { useAuth } from '../../../contexts/AuthContext';
 import { ContactListItem } from '../../../components/contacts/ContactListItem';
 import { SearchBar } from '../../../components/common/SearchBar';
+import { Contact, UserProfile } from '../../../types';
 import { colors } from '../../../constants/colors';
 import { spacing, fontSizes } from '../../../constants/theme';
 
@@ -13,40 +15,99 @@ interface ContactSection {
   data: Contact[];
 }
 
+function profileToContact(p: UserProfile): Contact {
+  const first = (p.firstName ?? '').trim();
+  const last = (p.lastName ?? '').trim();
+  const name =
+    [first, last].filter(Boolean).join(' ') ||
+    p.name ||
+    p.username ||
+    'Unknown user';
+  const initials =
+    (first.charAt(0) + (last.charAt(0) || '')).toUpperCase() ||
+    (p.username ?? '').charAt(0).toUpperCase() ||
+    '?';
+  return {
+    id: p.uid,
+    name,
+    avatar: p.photoURL || undefined,
+    initials,
+    email: p.email,
+  };
+}
+
 export default function ContactsScreen() {
   const router = useRouter();
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const { user } = useAuth();
+  const [users, setUsers] = useState<UserProfile[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [opening, setOpening] = useState<string | null>(null);
 
   useEffect(() => {
-    contactsApi.getContacts().then(setContacts);
-  }, []);
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await userService.listAll();
+        if (!cancelled) {
+          setUsers(list.filter((p) => p.uid !== user?.uid));
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[contacts] failed to load users', e);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid]);
 
   const sections = useMemo<ContactSection[]>(() => {
     const filtered = searchQuery.trim()
-      ? contacts.filter((c) => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
-      : contacts;
+      ? users.filter((p) => {
+          const q = searchQuery.trim().toLowerCase();
+          const fullName =
+            [p.firstName, p.lastName].filter(Boolean).join(' ').toLowerCase() ||
+            p.name.toLowerCase();
+          return (
+            fullName.includes(q) ||
+            (p.username ?? '').toLowerCase().includes(q) ||
+            (p.email ?? '').toLowerCase().includes(q)
+          );
+        })
+      : users;
 
     const grouped: Record<string, Contact[]> = {};
-    filtered.forEach((contact) => {
-      const letter = contact.name.charAt(0).toUpperCase();
-      if (!grouped[letter]) {
-        grouped[letter] = [];
-      }
+    for (const p of filtered) {
+      const contact = profileToContact(p);
+      const letter = (contact.name.charAt(0) || '?').toUpperCase();
+      if (!grouped[letter]) grouped[letter] = [];
       grouped[letter].push(contact);
-    });
-
+    }
     return Object.keys(grouped)
       .sort()
-      .map((letter) => ({
-        title: letter,
-        data: grouped[letter],
-      }));
-  }, [contacts, searchQuery]);
+      .map((letter) => ({ title: letter, data: grouped[letter] }));
+  }, [users, searchQuery]);
 
-  const handleContactPress = (contact: Contact) => {
-    console.log('Contact pressed:', contact);
-  };
+  const handleContactPress = useCallback(
+    async (contact: Contact) => {
+      if (!contact.id || opening) return;
+      setOpening(contact.id);
+      try {
+        const chatId = await chatService.openDirectChat(contact.id);
+        // @ts-ignore - dynamic route path
+        router.push({ pathname: '/chat/[id]', params: { id: chatId } });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[contacts] openDirectChat failed', e);
+      } finally {
+        setOpening(null);
+      }
+    },
+    [router, opening],
+  );
 
   const renderItem = ({ item }: { item: Contact }) => (
     <ContactListItem contact={item} onPress={handleContactPress} />
@@ -60,6 +121,14 @@ export default function ContactsScreen() {
 
   const renderSeparator = () => <View style={styles.separator} />;
 
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -68,7 +137,7 @@ export default function ContactsScreen() {
       <SearchBar
         value={searchQuery}
         onChangeText={setSearchQuery}
-        placeholder="Search contacts"
+        placeholder="Search by name, username, or email"
       />
       <SectionList
         sections={sections}
@@ -78,6 +147,15 @@ export default function ContactsScreen() {
         ItemSeparatorComponent={renderSeparator}
         contentContainerStyle={styles.list}
         stickySectionHeadersEnabled
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Text style={styles.emptyText}>
+              {searchQuery
+                ? 'No matches for that search.'
+                : 'No other users yet — invite someone!'}
+            </Text>
+          </View>
+        }
       />
     </View>
   );
@@ -86,6 +164,12 @@ export default function ContactsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: colors.white,
+  },
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: colors.white,
   },
   header: {
@@ -101,12 +185,9 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: colors.text,
   },
-  addButton: {
-    fontSize: 28,
-    color: colors.primary,
-  },
   list: {
     paddingBottom: spacing.xl,
+    flexGrow: 1,
   },
   sectionHeader: {
     paddingHorizontal: spacing.lg,
@@ -122,5 +203,13 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.border,
     marginLeft: 80,
+  },
+  empty: {
+    paddingTop: spacing.xxl,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: fontSizes.footnote,
+    color: colors.textSecondary,
   },
 });

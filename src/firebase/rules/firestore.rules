@@ -48,6 +48,30 @@ service cloud.firestore {
         && incomingData().createdAt is timestamp;
     }
 
+    // At signup, only display name + email are present; the
+    // firstName/lastName/username fields are filled in by the
+    // /complete-profile step. Make those optional in the create rule.
+    function validUserFieldsForCreate() {
+      let d = incomingData();
+      return d.uid == request.auth.uid
+        && d.name is string
+        && d.name.size() > 0
+        && d.name.size() <= 80
+        && d.email is string
+        && d.email.matches('.*@.*\\..*')
+        && d.photoURL is string
+        && d.status is string
+        && d.status.size() <= 140
+        && d.isOnline is bool
+        && d.lastSeen is timestamp
+        && d.createdAt is timestamp
+        // Optional username fields. If present, they must be well-formed.
+        && (!('firstName' in d) || (d.firstName is string && d.firstName.size() <= 80))
+        && (!('lastName' in d) || (d.lastName is string && d.lastName.size() <= 80))
+        && (!('username' in d) || (d.username is string && d.username.size() <= 20))
+        && (!('usernameLower' in d) || (d.usernameLower is string && d.usernameLower.size() <= 20));
+    }
+
     // Message validation: only the documented fields, sensible sizes.
     function validMessageFields(chatId) {
       let d = incomingData();
@@ -67,17 +91,45 @@ service cloud.firestore {
       allow read: if isSelf(uid) || isSignedIn();
 
       // Profile creation happens once, on signup, by the user themselves.
-      allow create: if isSelf(uid) && validUserFields();
+      // At signup the firstName/lastName/username fields are absent —
+      // they're filled in via /complete-profile. See
+      // validUserFieldsForCreate for the relaxed schema check.
+      allow create: if isSelf(uid) && validUserFieldsForCreate();
 
       // Updates: user can change their own profile, but cannot spoof
-      // sensitive fields like createdAt.
+      // sensitive fields like createdAt. The username change happens
+      // here and must be paired with a /usernames/{lower} claim (the
+      // usernames rule below).
       allow update: if isSelf(uid)
         && incomingData().uid == existingData().uid
         && incomingData().email == existingData().email
         && incomingData().createdAt == existingData().createdAt
-        && validUserFields();
+        && validUserFieldsForCreate();
 
       allow delete: if false; // never; deletion is an account-deletion flow
+    }
+
+    // ---------- /usernames/{lowerUsername} ----------
+    // Username → uid reservation. Doc id is the lowercased username.
+    // The transaction in userService.setNames writes both /usernames/{l}
+    // and /users/{uid} in one shot; the rules below mirror that:
+    //   - anyone signed in can read (needed for search)
+    //   - the uid field on the new doc must match the requester
+    //   - updates/deletes are restricted to the owner
+    match /usernames/{lowerUsername} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && incomingData().uid == request.auth.uid
+        && incomingData().username is string
+        && incomingData().username.size() >= 3
+        && incomingData().username.size() <= 20
+        && incomingData().createdAt is timestamp;
+      // Owner can delete their own reservation (e.g. on username change
+      // or account deletion). update is not allowed — the doc is
+      // immutable: the user must delete + recreate.
+      allow update: if false;
+      allow delete: if isSignedIn()
+        && existingData().uid == request.auth.uid;
     }
 
     // ---------- /chats/{chatId} (1:1) ----------

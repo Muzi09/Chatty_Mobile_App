@@ -1,84 +1,164 @@
-import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, Text, TouchableOpacity } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import {
+  View,
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Conversation, Message } from '../../../types';
-import { messagesApi } from '../../../services/api';
+import { useAuth } from '../../../contexts/AuthContext';
+import { useMessages } from '../../../hooks/useMessages';
+import { useChatMeta } from '../../../hooks/useChatMeta';
+import { useTyping } from '../../../hooks/useTyping';
+import { userService } from '../../../services/userService';
 import { Avatar } from '../../../components/common/Avatar';
 import { MessageBubble } from '../../../components/chat/MessageBubble';
-import { TypingIndicator } from '../../../components/chat/TypingIndicator';
 import { MessageInput } from '../../../components/chat/MessageInput';
+import { TypingIndicator } from '../../../components/chat/TypingIndicator';
+import { ChatMessage, UserProfile } from '../../../types';
 import { colors } from '../../../constants/colors';
 import { spacing, fontSizes } from '../../../constants/theme';
 
 export default function ChatScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string | string[] }>();
   const router = useRouter();
-  const [conversation, setConversation] = useState<Conversation | null>(null);
-  const [isTyping, setIsTyping] = useState(false);
+  const { user } = useAuth();
+  const me = user?.uid ?? '';
 
+  // Route params can be string | string[] | undefined; normalize.
+  const id = Array.isArray(params.id) ? params.id[0] : params.id;
+
+  const { messages, loading, sendText, markLatestRead } = useMessages({
+    scope: 'direct',
+    conversationId: id ?? '',
+  });
+  const { chat } = useChatMeta('direct', id ?? '');
+  const { isOtherTyping, emitter } = useTyping({
+    scope: 'direct',
+    conversationId: id ?? '',
+  });
+
+  const [otherUser, setOtherUser] = useState<UserProfile | null>(null);
+
+  // Look up the other participant's profile for the header.
   useEffect(() => {
-    if (id) {
-      messagesApi.getConversation(id).then((conv) => {
-        if (conv) {
-          setConversation(conv);
-          setIsTyping(conv.unreadCount > 0);
-        }
+    if (!chat || !me) return;
+    const otherUid = chat.participants.find((p) => p !== me);
+    if (!otherUid) return;
+    let cancelled = false;
+    userService
+      .get(otherUid)
+      .then((p) => {
+        if (!cancelled) setOtherUser(p);
+      })
+      .catch(() => {
+        if (!cancelled) setOtherUser(null);
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [chat, me]);
+
+  // Mark latest message as read whenever messages change.
+  useEffect(() => {
+    if (messages.length > 0) {
+      markLatestRead().catch(() => {});
     }
-  }, [id]);
+  }, [messages, markLatestRead]);
 
-  const handleSend = async (text: string) => {
-    if (id) {
-      await messagesApi.sendMessage(id, text);
-    }
-  };
+  // Tear down the typing emitter on unmount.
+  useEffect(() => emitter.cancel, [emitter]);
 
-  const formatDate = (date: Date) => {
-    return `TODAY ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-  };
+  const handleSend = useCallback(
+    async (text: string) => {
+      if (!id) return;
+      try {
+        await sendText(text);
+        emitter.onSend();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[chat] sendText failed', e);
+      }
+    },
+    [id, sendText, emitter],
+  );
 
-  if (!conversation) {
+  const handleChangeText = useCallback(
+    (s: string) => {
+      if (s.length > 0) emitter.onKeystroke();
+    },
+    [emitter],
+  );
+
+  if (!id) {
     return (
-      <View style={styles.loading}>
-        <Text>Loading...</Text>
+      <View style={styles.center}>
+        <Text>Missing chat id</Text>
       </View>
     );
   }
 
+  const headerName =
+    otherUser?.name || (otherUser?.username ? `@${otherUser.username}` : 'Chat');
+  const headerAvatarUri = otherUser?.photoURL;
+  const headerInitials =
+    (otherUser?.firstName?.charAt(0) ?? '') + (otherUser?.lastName?.charAt(0) ?? '');
+
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <Text style={styles.backText}>‹ Back</Text>
+        </TouchableOpacity>
         <View style={styles.profileContainer}>
           <Avatar
-            uri={conversation.participant.avatar}
-            initials={conversation.participant.initials}
-            name={conversation.participant.name}
+            uri={headerAvatarUri}
+            initials={headerInitials || headerName.charAt(0).toUpperCase()}
+            name={headerName}
             size="small"
           />
-          <Text style={styles.profileName}>{conversation.participant.name}</Text>
+          <Text style={styles.profileName} numberOfLines={1}>
+            {headerName}
+          </Text>
         </View>
       </View>
 
-      <ScrollView style={styles.messagesContainer} contentContainerStyle={styles.messagesContent}>
-        <View style={styles.dateHeader}>
-          <Text style={styles.dateText}>
-            {formatDate(conversation.lastMessageTime)}
-          </Text>
+      {loading && messages.length === 0 ? (
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.primary} />
         </View>
-        {conversation.messages.map((message: Message) => (
-          <MessageBubble
-            key={message.id}
-            text={message.text}
-            isFromMe={message.isFromMe}
-            timestamp={message.timestamp}
-            status={message.status}
-          />
-        ))}
-        {isTyping && <TypingIndicator />}
-      </ScrollView>
+      ) : (
+        <FlatList
+          data={messages}
+          keyExtractor={(m) => m.id}
+          contentContainerStyle={styles.messagesContent}
+          renderItem={({ item }: { item: ChatMessage }) => (
+            <MessageBubble
+              text={item.text ?? (item.type !== 'text' ? `[${item.type}]` : '')}
+              isFromMe={item.senderId === me}
+              timestamp={item.createdAt}
+              status={
+                item.status === 'read'
+                  ? 'read'
+                  : item.status === 'delivered'
+                    ? 'delivered'
+                    : 'sent'
+              }
+            />
+          )}
+          ListFooterComponent={isOtherTyping ? <TypingIndicator /> : null}
+        />
+      )}
 
-      <MessageInput onSend={handleSend} />
-    </View>
+      <MessageInput onSend={handleSend} onChangeText={handleChangeText} />
+    </KeyboardAvoidingView>
   );
 }
 
@@ -87,7 +167,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.white,
   },
-  loading: {
+  center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
@@ -102,13 +182,14 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   backButton: {
-    flex: 1,
+    marginRight: spacing.md,
   },
   backText: {
     fontSize: fontSizes.body,
     color: colors.primary,
   },
   profileContainer: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -117,27 +198,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.text,
     marginLeft: spacing.sm,
-  },
-  videoButton: {
-    flex: 1,
-    alignItems: 'flex-end',
-  },
-  videoIcon: {
-    fontSize: 24,
-  },
-  messagesContainer: {
     flex: 1,
   },
   messagesContent: {
     paddingVertical: spacing.md,
-  },
-  dateHeader: {
-    alignItems: 'center',
-    paddingVertical: spacing.md,
-  },
-  dateText: {
-    fontSize: fontSizes.footnote,
-    color: colors.textSecondary,
-    fontWeight: '600',
   },
 });

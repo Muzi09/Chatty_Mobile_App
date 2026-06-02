@@ -48,6 +48,10 @@ function mapUserDoc(snap: import('firebase/firestore').DocumentSnapshot): UserPr
     isOnline: !!d.isOnline,
     lastSeen: toDate(d.lastSeen),
     createdAt: toDate(d.createdAt),
+    firstName: d.firstName,
+    lastName: d.lastName,
+    username: d.username,
+    usernameLower: d.usernameLower,
     displayNameLower: d.displayNameLower,
     pushToken: d.pushToken,
   };
@@ -178,10 +182,14 @@ export const userRepository = {
         q,
         (snap) => {
           for (const d of snap.docs) {
+            // Capture the id up-front so TS doesn't narrow `d` to `never`
+            // on the `!d.exists()` branch (DocumentSnapshot narrowing
+            // quirk).
+            const id = d.id;
             if (!d.exists()) {
-              delete acc[d.id];
+              delete acc[id];
             } else {
-              acc[d.id] = mapUserSummary(d);
+              acc[id] = mapUserSummary(d);
             }
           }
           emit();

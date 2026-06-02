@@ -8,6 +8,10 @@
 //     strings, and that gives us prefix queries for free).
 // ============================================================================
 
+/** Re-exported from firebase/firestore so callers don't need to import
+ *  the SDK directly. Matches the type that onSnapshot returns. */
+export type Unsubscribe = () => void;
+
 // --- Existing UI types (kept for backward compatibility with screens) -----
 
 export interface User {
@@ -59,6 +63,8 @@ export interface SettingsItem {
 /** A user document at /users/{uid}. */
 export interface UserProfile {
   uid: string;
+  /** Derived "First Last" — kept for inbox row labels and back-compat
+   *  with the existing chat head data shape. */
   name: string;
   email: string;
   photoURL: string;
@@ -67,7 +73,16 @@ export interface UserProfile {
   lastSeen: Date;
   createdAt: Date;
 
-  /** Lowercased name for case-insensitive prefix search. */
+  /** First name, e.g. "John". */
+  firstName?: string;
+  /** Last name, e.g. "Doe". */
+  lastName?: string;
+  /** Display username, e.g. "john_doe". Unique. */
+  username?: string;
+  /** Lowercased username for case-insensitive lookups. */
+  usernameLower?: string;
+
+  /** Lowercased full name for case-insensitive prefix search. */
   displayNameLower?: string;
 
   /** FCM/APNs push token. Kept on the profile for simplicity. */

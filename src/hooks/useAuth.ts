@@ -16,11 +16,26 @@ export interface UseAuthState {
   profile: UserProfile | null;
   loading: boolean;
   error: Error | null;
+  /**
+   * True when the user is signed in but has not yet chosen a unique
+   * username. The AuthGate uses this to route to /complete-profile.
+   */
+  needsProfileCompletion: boolean;
   signUp: (args: { email: string; password: string; name: string }) => Promise<string>;
   signIn: (args: { email: string; password: string }) => Promise<string>;
   signOut: () => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
+  /**
+   * Save first name, last name, and a unique username. Reserved via a
+   * transaction in userService.setNames — throws if the username is
+   * already taken.
+   */
+  completeProfile: (args: {
+    firstName: string;
+    lastName: string;
+    username: string;
+  }) => Promise<void>;
 }
 
 /**
@@ -102,15 +117,39 @@ export function useAuthInternal(): UseAuthState {
     setProfile(p);
   }, [user]);
 
+  const completeProfile = useCallback(
+    async (args: { firstName: string; lastName: string; username: string }) => {
+      if (!user) throw new Error('Not signed in');
+      try {
+        await userService.setNames({
+          uid: user.uid,
+          firstName: args.firstName,
+          lastName: args.lastName,
+          username: args.username,
+          previousUsernameLower: profile?.usernameLower,
+        });
+      } catch (e) {
+        setError(e as Error);
+        throw e;
+      }
+    },
+    [user, profile],
+  );
+
+  // The profile-completion gate: signed in but no username chosen yet.
+  const needsProfileCompletion = !!user && !profile?.username;
+
   return {
     user,
     profile,
     loading,
     error,
+    needsProfileCompletion,
     signUp,
     signIn,
     signOut,
     forgotPassword,
     refreshProfile,
+    completeProfile,
   };
 }

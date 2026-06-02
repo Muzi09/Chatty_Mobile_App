@@ -26,8 +26,9 @@ export interface UploadProgress {
 export interface UploadOptions {
   /** Path within the bucket, e.g. "avatars/abc/avatar.jpg". */
   path: string;
-  /** Raw bytes or a local file URI (handled by RN fetch). */
-  data: Blob | Uint8Array | string;
+  /** Raw bytes. (Local file URIs are turned into Blobs by the caller
+   *  via fetch, so the SDK never sees a `string` here.) */
+  data: Blob | Uint8Array;
   contentType?: string;
   onProgress?: (p: UploadProgress) => void;
 }

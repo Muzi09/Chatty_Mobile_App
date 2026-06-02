@@ -10,12 +10,12 @@
 // staging and prod by switching `app.config.js` envs.
 // ============================================================================
 
+import { Platform } from 'react-native';
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
-import { getAuth, Auth, initializeAuth, getReactNativePersistence } from 'firebase/auth';
+import { getAuth, Auth, initializeAuth } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import { getFunctions, Functions } from 'firebase/functions';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 interface FirebaseConfig {
@@ -45,13 +45,22 @@ function readConfig(): FirebaseConfig {
     appId: extra?.appId ?? process.env.EXPO_PUBLIC_FIREBASE_APP_ID ?? '',
   };
 
-  if (!cfg.apiKey || !cfg.projectId) {
-    // Surface a loud error at first load rather than a confusing failure
-    // deep inside the auth flow. Devs hit this when they forget to set
-    // the env vars.
+  const missing: string[] = [];
+  if (!cfg.apiKey) missing.push('EXPO_PUBLIC_FIREBASE_API_KEY');
+  if (!cfg.projectId) missing.push('EXPO_PUBLIC_FIREBASE_PROJECT_ID');
+  if (!cfg.appId) missing.push('EXPO_PUBLIC_FIREBASE_APP_ID');
+  if (!cfg.authDomain) missing.push('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN');
+  if (missing.length > 0) {
     // eslint-disable-next-line no-console
     console.warn(
-      '[firebase] Missing config. Set EXPO_PUBLIC_FIREBASE_* env vars or add `extra.firebase` to app.config.js.',
+      `[firebase] Missing config: ${missing.join(', ')}. ` +
+        'Set EXPO_PUBLIC_FIREBASE_* env vars (and restart Expo with `expo start -c`) ' +
+        'or add `extra.firebase` to app.config.js.',
+    );
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[firebase] config loaded for project ${cfg.projectId} (${Platform.OS})`,
     );
   }
 
@@ -72,17 +81,42 @@ export function getFirebaseApp(): FirebaseApp {
 
 export function getFirebaseAuth(): Auth {
   if (_auth) return _auth;
-  // initializeAuth with AsyncStorage persistence — this is the difference
-  // between "session survives app restart" and "user gets logged out
-  // every time". `getAuth()` alone uses in-memory persistence on RN.
+
+  // Persistence strategy:
+  //   - native (iOS / Android): RN AsyncStorage, so sessions survive
+  //     app restarts
+  //   - web:                   browser localStorage via Firebase's
+  //     default indexedDB / localStorage persistence
+  //
+  // `getReactNativePersistence` only exists in the firebase/auth RN
+  // entry point. On web it's undefined; on native it's a function.
+  // We import AsyncStorage lazily so the web bundle doesn't even
+  // attempt to load it.
+  if (Platform.OS === 'web') {
+    _auth = getAuth(getFirebaseApp());
+    return _auth;
+  }
+
   try {
-    _auth = initializeAuth(getFirebaseApp(), {
-      persistence: getReactNativePersistence(AsyncStorage),
-    });
-  } catch {
+    // Lazy require so web doesn't try to bundle RN-only modules.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const authModule = require('firebase/auth') as { getReactNativePersistence?: (s: unknown) => unknown };
+    const getRNP = authModule.getReactNativePersistence;
+    if (typeof getRNP === 'function') {
+      _auth = initializeAuth(getFirebaseApp(), {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        persistence: (getRNP as any)(AsyncStorage),
+      });
+    } else {
+      _auth = getAuth(getFirebaseApp());
+    }
+  } catch (e) {
     // initializeAuth throws if called twice in hot-reload. Fall back to
-    // the default (still has RN in-memory persistence, but better than
-    // crashing the app).
+    // the default (in-memory persistence, but better than crashing).
+    // eslint-disable-next-line no-console
+    console.warn('[firebase] initializeAuth failed, falling back to getAuth:', e);
     _auth = getAuth(getFirebaseApp());
   }
   return _auth;

@@ -61,13 +61,17 @@ export const notificationService = {
       return null;
     }
 
-    const { status: existing } = await Notifications.getPermissionsAsync();
-    let finalStatus = existing;
-    if (existing !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
+    const existing = (await Notifications.getPermissionsAsync()) as unknown as {
+      granted: boolean;
+    };
+    let finalGranted = existing.granted;
+    if (!finalGranted) {
+      const requested = (await Notifications.requestPermissionsAsync()) as unknown as {
+        granted: boolean;
+      };
+      finalGranted = requested.granted;
     }
-    if (finalStatus !== 'granted') {
+    if (!finalGranted) {
       // eslint-disable-next-line no-console
       console.log('[notificationService] Permission not granted');
       return null;

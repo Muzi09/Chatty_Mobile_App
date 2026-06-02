@@ -5,11 +5,17 @@ import { spacing, borderRadius, fontSizes } from '../../constants/theme';
 
 interface MessageInputProps {
   onSend?: (text: string) => void;
+  onChangeText?: (text: string) => void;
   placeholder?: string;
 }
 
-export function MessageInput({ onSend, placeholder = 'iMessage' }: MessageInputProps) {
+export function MessageInput({ onSend, onChangeText, placeholder = 'iMessage' }: MessageInputProps) {
   const [text, setText] = useState('');
+
+  const handleChange = (s: string) => {
+    setText(s);
+    onChangeText?.(s);
+  };
 
   const handleSend = () => {
     if (text.trim()) {
@@ -28,7 +34,7 @@ export function MessageInput({ onSend, placeholder = 'iMessage' }: MessageInputP
         <TextInput
           style={styles.input}
           value={text}
-          onChangeText={setText}
+          onChangeText={handleChange}
           placeholder={placeholder}
           placeholderTextColor={colors.textTertiary}
           multiline

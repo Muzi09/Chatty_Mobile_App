@@ -1,16 +1,20 @@
 import React from 'react';
 import { TouchableOpacity, Text, View, StyleSheet } from 'react-native';
-import { Conversation } from '../../types';
+import { InboxItem } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { colors } from '../../constants/colors';
 import { spacing, fontSizes, borderRadius } from '../../constants/theme';
 
 interface ConversationListItemProps {
-  conversation: Conversation;
-  onPress: (conversation: Conversation) => void;
+  /**
+   * The row to render. Either an InboxItem (from useInbox) or a
+   * Conversation (legacy). New code should pass InboxItem.
+   */
+  item: InboxItem;
+  onPress?: (item: InboxItem) => void;
 }
 
-export function ConversationListItem({ conversation, onPress }: ConversationListItemProps) {
+export function ConversationListItem({ item, onPress }: ConversationListItemProps) {
   const formatTime = (date: Date) => {
     const now = new Date();
     const diff = now.getTime() - date.getTime();
@@ -26,32 +30,36 @@ export function ConversationListItem({ conversation, onPress }: ConversationList
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
+  const initials = (item.name || '?')
+    .split(/\s+/)
+    .map((s) => s.charAt(0))
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+
   return (
     <TouchableOpacity
       style={styles.container}
-      onPress={() => onPress(conversation)}
-      activeOpacity={0.7}
+      onPress={onPress ? () => onPress(item) : undefined}
+      activeOpacity={onPress ? 0.7 : 1}
+      disabled={!onPress}
     >
-      <Avatar
-        uri={conversation.participant.avatar}
-        initials={conversation.participant.initials}
-        name={conversation.participant.name}
-        size="medium"
-      />
+      <Avatar uri={item.photoURL} initials={initials} name={item.name} size="medium" />
       <View style={styles.content}>
         <View style={styles.header}>
           <Text style={styles.name} numberOfLines={1}>
-            {conversation.participant.name}
+            {item.name || 'Unknown'}
           </Text>
-          <Text style={styles.time}>{formatTime(conversation.lastMessageTime)}</Text>
+          <Text style={styles.time}>{formatTime(item.lastMessageAt)}</Text>
         </View>
         <View style={styles.messageRow}>
           <Text style={styles.message} numberOfLines={1}>
-            {conversation.lastMessage}
+            {item.lastMessage || 'No messages yet'}
           </Text>
-          {conversation.unreadCount > 0 && (
+          {item.unreadCount > 0 && (
             <View style={styles.unreadBadge}>
-              <Text style={styles.unreadText}>{conversation.unreadCount}</Text>
+              <Text style={styles.unreadText}>{item.unreadCount}</Text>
             </View>
           )}
         </View>
