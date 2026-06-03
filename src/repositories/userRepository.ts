@@ -9,26 +9,25 @@
 import {
   collection,
   doc,
+  endAt,
   getDoc,
   getDocs,
-  query,
-  setDoc,
-  updateDoc,
-  where,
-  orderBy,
-  startAt,
-  endAt,
   limit,
   onSnapshot,
+  orderBy,
+  query,
   serverTimestamp,
+  setDoc,
+  startAt,
   Unsubscribe,
+  updateDoc,
+  where,
 } from 'firebase/firestore';
+import { COLLECTIONS, ErrorCode } from '../constants/firebase';
 import { getDb } from '../firebase/config';
-import { COLLECTIONS } from '../constants/firebase';
-import { toDate } from '../utils/timestamp';
-import { toAppError, AppError } from '../utils/errors';
-import { ErrorCode } from '../constants/firebase';
 import { UserProfile, UserSummary } from '../types';
+import { AppError, toAppError } from '../utils/errors';
+import { toDate } from '../utils/timestamp';
 
 function ref(uid?: string) {
   return uid
@@ -97,7 +96,7 @@ export const userRepository = {
       if (typeof patch.name === 'string') {
         update.displayNameLower = patch.name.trim().toLowerCase();
       }
-      await updateDoc(ref(uid), update);
+      await setDoc(ref(uid), update, { merge: true });
     } catch (e) {
       throw toAppError(e);
     }

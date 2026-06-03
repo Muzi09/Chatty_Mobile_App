@@ -5,8 +5,8 @@
 // `user`, `profile`, `loading`, and the service methods.
 // ============================================================================
 
-import { useEffect, useState, useCallback } from 'react';
 import { User as FirebaseUser } from 'firebase/auth';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { authService } from '../services/authService';
 import { userService } from '../services/userService';
 import { UserProfile } from '../types';
@@ -48,23 +48,42 @@ export function useAuthInternal(): UseAuthState {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
+  // DEBUG: render counter
+  const renderCount = useRef(0);
+  renderCount.current += 1;
+  // eslint-disable-next-line no-console
+  console.log(`[DEBUG] useAuthInternal render #${renderCount.current}, loading=${loading}, user=${user?.uid ?? 'null'}`);
+
   // 1) Listen to Firebase auth state.
   useEffect(() => {
     const unsub = authService.onAuthStateChanged((u) => {
       setUser(u);
       if (!u) {
         setProfile(null);
-        setLoading(false);
       }
+      // Always clear loading once we know the auth state — never leave
+      // `loading` true when `user` is settled.
+      setLoading(false);
     });
-    return unsub;
+    // Safety net: if the auth callback never fires (SDK init failure,
+    // hot-reload edge case, etc.), clear loading so the AuthGate doesn't
+    // show a spinner forever.
+    const timeout = setTimeout(() => setLoading(false), 5000);
+    return () => {
+      unsub();
+      clearTimeout(timeout);
+    };
   }, []);
 
   // 2) Whenever the user changes, fetch the Firestore profile and
   //    keep it live.
   useEffect(() => {
-    if (!user) return;
-    setLoading(true);
+    if (!user) {
+      // No user → no profile to watch. Make sure loading is cleared so
+      // the AuthGate can route to /login instead of showing a spinner.
+      setLoading(false);
+      return;
+    }
     const unsub = userService.watch(user.uid, (p) => {
       setProfile(p);
       setLoading(false);

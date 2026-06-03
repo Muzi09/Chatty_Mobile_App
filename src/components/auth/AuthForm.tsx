@@ -8,7 +8,16 @@
 // ============================================================================
 
 import React, { ReactNode } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
 import { colors } from '../../constants/colors';
 import { spacing, fontSizes, borderRadius } from '../../constants/theme';
 
@@ -36,31 +45,36 @@ export function AuthForm({
   children,
 }: AuthFormProps) {
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>{title}</Text>
-        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <View style={styles.scrollContent}>
+        <View style={styles.header}>
+          <Text style={styles.title}>{title}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        </View>
+
+        <View style={styles.fields}>{children}</View>
+
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+
+        <TouchableOpacity
+          style={[styles.button, (loading || disabled) && styles.buttonDisabled]}
+          onPress={onSubmit}
+          disabled={loading || disabled}
+          activeOpacity={0.8}
+        >
+          {loading ? (
+            <ActivityIndicator color={colors.white} />
+          ) : (
+            <Text style={styles.buttonText}>{submitLabel}</Text>
+          )}
+        </TouchableOpacity>
+
+        {footer ? <View style={styles.footer}>{footer}</View> : null}
       </View>
-
-      <View style={styles.fields}>{children}</View>
-
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-
-      <TouchableOpacity
-        style={[styles.button, (loading || disabled) && styles.buttonDisabled]}
-        onPress={onSubmit}
-        disabled={loading || disabled}
-        activeOpacity={0.8}
-      >
-        {loading ? (
-          <ActivityIndicator color={colors.white} />
-        ) : (
-          <Text style={styles.buttonText}>{submitLabel}</Text>
-        )}
-      </TouchableOpacity>
-
-      {footer ? <View style={styles.footer}>{footer}</View> : null}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -113,15 +127,15 @@ export function AuthField({
   );
 }
 
-// Local import to keep the AuthField declaration tidy.
-import { TextInput } from 'react-native';
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: colors.white,
+  },
+  scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.xxl,
-    backgroundColor: colors.white,
   },
   header: {
     marginBottom: spacing.xl,

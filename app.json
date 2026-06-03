@@ -39,6 +39,16 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "firebase": {
+        "apiKey": "AIzaSyB5R-POZbJjOI_G-zA1t8Dxs5FXsv4WORs",
+        "authDomain": "chatty-b96be.firebaseapp.com",
+        "projectId": "chatty-b96be",
+        "storageBucket": "chatty-b96be.firebasestorage.app",
+        "messagingSenderId": "997893387523",
+        "appId": "1:997893387523:web:c7bae5f59fae0e01fb6536"
+      }
     }
   }
 }

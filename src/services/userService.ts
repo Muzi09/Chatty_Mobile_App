@@ -5,13 +5,13 @@
 // ============================================================================
 
 import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { COLLECTIONS, ErrorCode } from '../constants/firebase';
 import { getDb } from '../firebase/config';
+import { storageRepository } from '../repositories/storageRepository';
 import { userRepository } from '../repositories/userRepository';
 import { usernameRepository } from '../repositories/usernameRepository';
-import { storageRepository } from '../repositories/storageRepository';
-import { AppError, toAppError } from '../utils/errors';
-import { COLLECTIONS, ErrorCode } from '../constants/firebase';
 import { UserProfile, UserSummary } from '../types';
+import { AppError, toAppError } from '../utils/errors';
 import { isValidUsername, normalizeUsername } from '../utils/username';
 
 function deriveName(firstName: string, lastName: string): string {
@@ -80,8 +80,13 @@ export const userService = {
 
     try {
       await runTransaction(getDb(), async (tx) => {
-        // 1) Reserve username (idempotent for same uid).
+        // 1) Read all referenced documents first.
         const unameSnap = await tx.get(usernameRef);
+        const userSnap = await tx.get(userRef);
+        const prevRef = prev && prev !== lower ? doc(getDb(), COLLECTIONS.USERNAMES, prev) : null;
+        const prevSnap = prevRef ? await tx.get(prevRef) : null;
+
+        // 2) Validate the username reservation before any writes.
         if (unameSnap.exists()) {
           const ownerUid = unameSnap.data()?.uid as string | undefined;
           if (ownerUid && ownerUid !== args.uid) {
@@ -90,7 +95,21 @@ export const userService = {
               'That username is already taken',
             );
           }
-        } else {
+        }
+
+        // 3) Release the old username reservation if it changed.
+        const profilePatch = {
+          firstName: first,
+          lastName: last,
+          name: fullName,
+          username,
+          usernameLower: lower,
+          displayNameLower: fullName.toLowerCase(),
+          lastSeen: serverTimestamp(),
+        };
+
+        // 4) Perform all writes after the reads are complete.
+        if (!unameSnap.exists()) {
           tx.set(usernameRef, {
             uid: args.uid,
             username,
@@ -98,24 +117,27 @@ export const userService = {
           });
         }
 
-        // 2) Release previous username reservation if it changed.
-        if (prev && prev !== lower) {
-          const prevRef = doc(getDb(), COLLECTIONS.USERNAMES, prev);
-          const prevSnap = await tx.get(prevRef);
-          if (prevSnap.exists() && prevSnap.data()?.uid === args.uid) {
-            tx.delete(prevRef);
-          }
+        if (prevRef && prevSnap?.exists() && prevSnap.data()?.uid === args.uid) {
+          tx.delete(prevRef);
         }
 
-        // 3) Update the user doc.
-        tx.update(userRef, {
-          firstName: first,
-          lastName: last,
-          name: fullName,
-          username,
-          usernameLower: lower,
-          displayNameLower: fullName.toLowerCase(),
-        });
+        if (!userSnap.exists()) {
+          tx.set(
+            userRef,
+            {
+              ...profilePatch,
+              uid: args.uid,
+              email: '',
+              photoURL: '',
+              status: 'Hey there! I am using Chatty.',
+              isOnline: true,
+              createdAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+        } else {
+          tx.update(userRef, profilePatch);
+        }
       });
     } catch (e) {
       throw toAppError(e);

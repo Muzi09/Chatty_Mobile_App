@@ -82,7 +82,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
   }, []);
 
-  const value = useMemo(() => state, [state]);
+  // Stabilize the context value. `useAuthInternal` returns a fresh object
+  // on every render, so `useMemo([state])` would never hit the cache and
+  // every consumer would re-render on every render. Depend on the actual
+  // primitives that drive consumers; the callbacks inside `state` are
+  // already stable via `useCallback` in `useAuthInternal`.
+  const value = useMemo(
+    () => state,
+    [
+      state.user,
+      state.profile,
+      state.loading,
+      state.error,
+      state.needsProfileCompletion,
+    ],
+  );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

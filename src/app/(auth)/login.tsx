@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../contexts/AuthContext';
@@ -14,6 +14,11 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // DEBUG: render counter to find the loop source
+  const renderCount = useRef(0);
+  renderCount.current += 1;
+  console.log(`[DEBUG] LoginScreen render #${renderCount.current}, email="${email}"`);
 
   const onSubmit = async () => {
     setError(null);
